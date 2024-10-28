@@ -1,49 +1,52 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import { ConfigService } from '@nestjs/config';
+
+import { UploadStrategy } from 'src/file/strategies/upload-strategy.interface';
+import { ImageUploadStrategy } from './strategies/image-upload.strategy';
+import { AudioUploadStrategy } from './strategies/audio-upload.strategy';
+
 @Injectable()
 export class FileService {
   private readonly client: S3Client;
-  private readonly image_key: string;
-  private readonly image_secret: string;
-  private readonly image_bucket: string;
-  private readonly image_region: string;
+  private readonly s3_key: string;
+  private readonly s3_secret: string;
+  private readonly s3_bucket: string;
+  private readonly s3_region: string;
 
-  constructor(configService: ConfigService) {
-    this.image_bucket = configService.get<string>('S3_IMAGE_BUCKET_NAME');
-    this.image_key = configService.get<string>('S3_IMAGE_ACCESS_KEY');
-    this.image_secret = configService.get<string>('S3_IMAGE_ACCESS_SECRET');
-    this.image_region = configService.get<string>('S3_REGION');
+  constructor(private readonly configService: ConfigService) {
+    this.s3_bucket = configService.get<string>('S3_IMAGE_BUCKET_NAME');
+    this.s3_key = configService.get<string>('S3_IMAGE_ACCESS_KEY');
+    this.s3_secret = configService.get<string>('S3_IMAGE_ACCESS_SECRET');
+    this.s3_region = configService.get<string>('S3_REGION');
     this.checkConfigurations();
     this.client = new S3Client({
-      region: this.image_region,
+      region: this.s3_region,
       credentials: {
-        accessKeyId: this.image_key,
-        secretAccessKey: this.image_secret,
+        accessKeyId: this.s3_key,
+        secretAccessKey: this.s3_secret,
       },
     });
   }
-  async upload(file) {
-    const key = `${Date.now().toString()}-${file.originalname}`;
-    const params = {
-      Key: key,
-      Body: file.buffer,
-      Bucket: this.image_bucket,
-      ContentType: file.mimetype,
-    };
-    const command = new PutObjectCommand(params);
-    const uploadFileS3 = await this.client.send(command);
-    if (uploadFileS3.$metadata.httpStatusCode !== 200)
-      throw new InternalServerErrorException('Failed upload File');
-    return `https://${this.image_bucket}.s3.${this.image_region}.amazonaws.com/${key}`;
-  }
+
   private checkConfigurations() {
-    if (
-      !this.image_bucket ||
-      !this.image_key ||
-      !this.image_secret ||
-      !this.image_region
-    )
-      throw new InternalServerErrorException('Missing S3 Configurations');
+    if (!this.s3_bucket || !this.s3_key || !this.s3_secret || !this.s3_region)
+      throw new InternalServerErrorException('Missing S3 configurations');
+  }
+  async uploadFile(file: Express.Multer.File): Promise<string> {
+    const strategy = this.getStrategy(file);
+    return strategy.uploadFile(file);
+  }
+  private getStrategy(file: Express.Multer.File): UploadStrategy {
+    const mimeType = file.mimetype;
+    const [type] = mimeType.split('/');
+    switch (type) {
+      case 'image':
+        return new ImageUploadStrategy(this.client, this.s3_bucket);
+      case 'audio':
+        return new AudioUploadStrategy(this.client, this.s3_bucket);
+      default:
+        throw new InternalServerErrorException('Unsupported file type');
+    }
   }
 }
